@@ -1,0 +1,18 @@
+{
+  "name": "wuthering-waves-sign-deploy",
+  "version": "1.0.0",
+  "exports": "./deploy.ts",
+  "tasks": {
+    "deploy": "deno run --allow-net deploy.ts",
+    "deploy:check": "deno check deploy.ts"
+  },
+  "imports": {
+    "hono": "jsr:@hono/hono@^4.5.0",
+    "@hono/hono/html": "jsr:@hono/hono@^4.5.0/html"
+  },
+  "deploy": {
+    "project": "wuthering-waves-sign",
+    "include": ["deploy.ts"],
+    "exclude": ["data/", "main.ts", "src/"]
+  }
+}
