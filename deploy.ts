@@ -6,6 +6,9 @@
 import { Hono } from 'hono';
 import { html } from 'hono/html';
 
+// ============ 配置 ============
+const ADMIN_PASSWORD = Deno.env.get('ADMIN_PASSWORD') || 'admin123';
+
 // ============ 内存数据库 ============
 class MemoryDatabase {
   private accounts: Map<number, any> = new Map();
@@ -136,7 +139,25 @@ const pageHtml = html`<!DOCTYPE html>
   <style>[x-cloak] { display: none !important; }</style>
 </head>
 <body class="bg-gray-100 min-h-screen" x-data="app()" x-init="init()">
-  <nav class="bg-blue-600 text-white shadow-lg">
+  <!-- 登录对话框 -->
+  <div x-show="!isLoggedIn" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 p-6">
+      <div class="text-center mb-6">
+        <i class="fas fa-lock text-4xl text-blue-600 mb-3"></i>
+        <h2 class="text-xl font-bold">管理员登录</h2>
+        <p class="text-gray-500 text-sm mt-1">请输入密码访问系统</p>
+      </div>
+      <div class="space-y-4">
+        <input x-model="loginPassword" type="password" placeholder="请输入密码" class="w-full border rounded px-4 py-3 text-center" @keyup.enter="doLogin()">
+        <button @click="doLogin()" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded font-medium transition">
+          登录
+        </button>
+      </div>
+      <p x-show="loginError" x-text="loginError" class="text-red-500 text-sm text-center mt-3"></p>
+    </div>
+  </div>
+
+  <nav x-show="isLoggedIn" class="bg-blue-600 text-white shadow-lg">
     <div class="container mx-auto px-4 py-3">
       <div class="flex items-center justify-between">
         <div class="flex items-center space-x-3">
@@ -147,6 +168,9 @@ const pageHtml = html`<!DOCTYPE html>
           <span class="text-sm" x-text="'系统状态: ' + (loading ? '加载中...' : '正常')"></span>
           <button @click="refreshData()" class="bg-blue-700 hover:bg-blue-800 px-3 py-1 rounded text-sm transition">
             <i class="fas fa-sync" :class="{ 'fa-spin': loading }"></i> 刷新
+          </button>
+          <button @click="logout()" class="bg-red-600 hover:bg-red-700 px-3 py-1 rounded text-sm transition" title="退出登录">
+            <i class="fas fa-sign-out-alt"></i> 退出
           </button>
         </div>
       </div>
@@ -328,12 +352,49 @@ const pageHtml = html`<!DOCTYPE html>
         newAccount: { userId: '', roleId: '', token: '', nickname: '' },
         editAccountData: { id: null, userId: '', roleId: '', token: '', nickname: '' },
         toast: { show: false, message: '', type: 'success' },
+        // 登录相关
+        isLoggedIn: false, loginPassword: '', loginError: '',
 
         get filteredAccounts() {
           return this.accounts.filter(a => !this.searchQuery || a.userId.includes(this.searchQuery) || a.roleId.includes(this.searchQuery) || (a.nickname && a.nickname.includes(this.searchQuery)));
         },
 
-        async init() { await this.refreshData(); },
+        async init() {
+          // 检查本地存储的登录状态
+          const savedAuth = localStorage.getItem('admin_auth');
+          if (savedAuth) {
+            // 验证 token 是否有效
+            const res = await fetch('/api/auth/check', { headers: { 'Authorization': 'Bearer ' + savedAuth } });
+            if (res.ok) this.isLoggedIn = true;
+            else localStorage.removeItem('admin_auth');
+          }
+          if (this.isLoggedIn) await this.refreshData();
+        },
+
+        async doLogin() {
+          if (!this.loginPassword) { this.loginError = '请输入密码'; return; }
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: this.loginPassword })
+          });
+          const data = await res.json();
+          if (data.success) {
+            localStorage.setItem('admin_auth', data.token);
+            this.isLoggedIn = true;
+            this.loginError = '';
+            this.loginPassword = '';
+            await this.refreshData();
+          } else {
+            this.loginError = data.message || '密码错误';
+          }
+        },
+
+        logout() {
+          localStorage.removeItem('admin_auth');
+          this.isLoggedIn = false;
+          this.loginPassword = '';
+        },
 
         async refreshData() {
           this.loading = true;
@@ -567,6 +628,38 @@ app.post('/api/sign/:id', async (c) => {
 
   return c.json({ success: true, data: result, code: 200 });
 });
+
+// 认证中间件
+const authMiddleware = async (c: any, next: any) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ success: false, message: '未登录', code: 401 }, 401);
+  }
+  const token = authHeader.substring(7);
+  if (token !== ADMIN_PASSWORD) {
+    return c.json({ success: false, message: '认证失败', code: 401 }, 401);
+  }
+  await next();
+};
+
+// 登录 API
+app.post('/api/auth/login', async (c) => {
+  const body = await c.req.json();
+  if (body.password === ADMIN_PASSWORD) {
+    return c.json({ success: true, token: ADMIN_PASSWORD, code: 200 });
+  }
+  return c.json({ success: false, message: '密码错误', code: 401 }, 401);
+});
+
+// 检查登录状态
+app.get('/api/auth/check', authMiddleware, (c) => {
+  return c.json({ success: true, code: 200 });
+});
+
+// 需要认证的 API
+app.use('/api/accounts/*', authMiddleware);
+app.use('/api/sign/*', authMiddleware);
+app.use('/api/dashboard', authMiddleware);
 
 // 仪表盘 API
 app.get('/api/dashboard', (c) => {
