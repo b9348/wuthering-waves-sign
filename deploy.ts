@@ -471,7 +471,18 @@ const pageHtml = html`<!DOCTYPE html>
           this.signing = true;
           const res = await fetch(\`/api/sign/\${id}\`, { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
-          this.showToast(data.data?.message || '签到完成', data.data?.status === 'success' ? 'success' : 'warning');
+          if (data.success) {
+            const result = data.data;
+            if (result.status === 'failed') {
+              this.showToast(`签到失败: ${result.message}`, 'error');
+            } else if (result.status === 'already_signed') {
+              this.showToast(result.message || '今日已签到', 'warning');
+            } else {
+              this.showToast(`签到成功${result.reward ? ': ' + result.reward : ''}`, 'success');
+            }
+          } else {
+            this.showToast(data.message || '签到失败', 'error');
+          }
           await this.refreshData(); this.signing = false;
         },
 
@@ -479,7 +490,19 @@ const pageHtml = html`<!DOCTYPE html>
           this.signing = true;
           const res = await fetch('/api/sign/all', { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
-          this.showToast(\`签到完成: 成功 \${data.data?.success || 0}\`, 'success');
+          if (data.success) {
+            const { success, failed, alreadySigned, results } = data.data || {};
+            if (failed > 0) {
+              // 显示失败的详细信息
+              const failedAccounts = results?.filter(r => r.status === 'failed') || [];
+              const failMsg = failedAccounts.map(r => `${r.userId}: ${r.message}`).join(', ');
+              this.showToast(`签到完成: 成功 ${success || 0}, 失败 ${failed}, 已签到 ${alreadySigned || 0}. 失败原因: ${failMsg}`, 'warning');
+            } else {
+              this.showToast(`签到完成: 成功 ${success || 0}, 已签到 ${alreadySigned || 0}`, 'success');
+            }
+          } else {
+            this.showToast(data.message || '签到失败', 'error');
+          }
           await this.refreshData(); this.signing = false;
         },
 
