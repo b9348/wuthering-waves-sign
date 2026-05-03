@@ -417,10 +417,19 @@ const pageHtml = html`<!DOCTYPE html>
           this.loginPassword = '';
         },
 
+        getAuthHeaders() {
+          const token = localStorage.getItem('admin_auth');
+          return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+        },
+
         async refreshData() {
           this.loading = true;
           try {
-            const [accRes, dashRes] = await Promise.all([fetch('/api/accounts'), fetch('/api/dashboard')]);
+            const headers = this.getAuthHeaders();
+            const [accRes, dashRes] = await Promise.all([
+              fetch('/api/accounts', { headers }),
+              fetch('/api/dashboard', { headers })
+            ]);
             const accData = await accRes.json(), dashData = await dashRes.json();
             if (accData.success) this.accounts = accData.data;
             if (dashData.success) { this.stats = dashData.data; this.recentLogs = dashData.data.recentLogs; }
@@ -429,7 +438,7 @@ const pageHtml = html`<!DOCTYPE html>
         },
 
         async addAccount() {
-          const res = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.newAccount) });
+          const res = await fetch('/api/accounts', { method: 'POST', headers: this.getAuthHeaders(), body: JSON.stringify(this.newAccount) });
           const data = await res.json();
           if (data.success) { this.showToast('添加成功', 'success'); this.showAddModal = false; this.newAccount = { userId: '', roleId: '', token: '', nickname: '' }; await this.refreshData(); }
           else this.showToast(data.message || '添加失败', 'error');
@@ -438,7 +447,7 @@ const pageHtml = html`<!DOCTYPE html>
         editAccount(account) { this.editAccountData = { ...account }; this.showEditModal = true; },
 
         async updateAccount() {
-          const res = await fetch(\`/api/accounts/\${this.editAccountData.id}\`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.editAccountData) });
+          const res = await fetch(\`/api/accounts/\${this.editAccountData.id}\`, { method: 'PUT', headers: this.getAuthHeaders(), body: JSON.stringify(this.editAccountData) });
           const data = await res.json();
           if (data.success) { this.showToast('更新成功', 'success'); this.showEditModal = false; await this.refreshData(); }
           else this.showToast(data.message || '更新失败', 'error');
@@ -446,21 +455,21 @@ const pageHtml = html`<!DOCTYPE html>
 
         async deleteAccount(id) {
           if (!confirm('确定删除?')) return;
-          const res = await fetch(\`/api/accounts/\${id}\`, { method: 'DELETE' });
+          const res = await fetch(\`/api/accounts/\${id}\`, { method: 'DELETE', headers: this.getAuthHeaders() });
           const data = await res.json();
           if (data.success) { this.showToast('删除成功', 'success'); await this.refreshData(); }
           else this.showToast(data.message || '删除失败', 'error');
         },
 
         async toggleAccount(id) {
-          const res = await fetch(\`/api/accounts/\${id}/toggle\`, { method: 'POST' });
+          const res = await fetch(\`/api/accounts/\${id}/toggle\`, { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
           if (data.success) { this.showToast(data.data.isActive ? '已启用' : '已禁用', 'success'); await this.refreshData(); }
         },
 
         async signAccount(id) {
           this.signing = true;
-          const res = await fetch(\`/api/sign/\${id}\`, { method: 'POST' });
+          const res = await fetch(\`/api/sign/\${id}\`, { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
           this.showToast(data.data?.message || '签到完成', data.data?.status === 'success' ? 'success' : 'warning');
           await this.refreshData(); this.signing = false;
@@ -468,7 +477,7 @@ const pageHtml = html`<!DOCTYPE html>
 
         async signAll() {
           this.signing = true;
-          const res = await fetch('/api/sign/all', { method: 'POST' });
+          const res = await fetch('/api/sign/all', { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
           this.showToast(\`签到完成: 成功 \${data.data?.success || 0}\`, 'success');
           await this.refreshData(); this.signing = false;
@@ -476,7 +485,7 @@ const pageHtml = html`<!DOCTYPE html>
 
         async validateAccount(id) {
           this.validating = true;
-          const res = await fetch(\`/api/accounts/\${id}/validate\`, { method: 'POST' });
+          const res = await fetch(\`/api/accounts/\${id}/validate\`, { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
           this.showToast(data.data?.message || '验证完成', data.data?.valid ? 'success' : 'error');
           await this.refreshData(); this.validating = false;
@@ -484,14 +493,14 @@ const pageHtml = html`<!DOCTYPE html>
 
         async validateAll() {
           this.validating = true;
-          const res = await fetch('/api/accounts/validate-all', { method: 'POST' });
+          const res = await fetch('/api/accounts/validate-all', { method: 'POST', headers: this.getAuthHeaders() });
           const data = await res.json();
           this.showToast(\`验证完成: 有效 \${data.data?.valid || 0}\`, 'success');
           await this.refreshData(); this.validating = false;
         },
 
         async exportAccounts() {
-          const res = await fetch('/api/accounts/export/data');
+          const res = await fetch('/api/accounts/export/data', { headers: this.getAuthHeaders() });
           const data = await res.json();
           const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
           const url = URL.createObjectURL(blob);
@@ -503,7 +512,7 @@ const pageHtml = html`<!DOCTYPE html>
           const file = e.target.files[0]; if (!file) return;
           const text = await file.text();
           const accounts = JSON.parse(text);
-          const res = await fetch('/api/accounts/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(accounts) });
+          const res = await fetch('/api/accounts/import', { method: 'POST', headers: this.getAuthHeaders(), body: JSON.stringify(accounts) });
           const data = await res.json();
           this.showToast(\`导入成功: \${data.data?.successCount || 0}\`, 'success');
           await this.refreshData(); e.target.value = '';
