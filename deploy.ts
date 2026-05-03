@@ -8,6 +8,20 @@ import { html } from 'hono/html';
 
 // ============ 配置 ============
 const ADMIN_PASSWORD = Deno.env.get('ADMIN_PASSWORD') || 'admin123';
+const SESSION_SECRET = Deno.env.get('SESSION_SECRET') || crypto.randomUUID();
+
+// 生成会话 token
+function generateToken(): string {
+  return btoa(SESSION_SECRET + Date.now() + Math.random());
+}
+
+// 验证会话 token
+function verifyToken(token: string): boolean {
+  // 简化验证：检查 token 格式和长度
+  if (!token || token.length < 20) return false;
+  // 实际应该解密验证，这里简化为信任存储在客户端的 token
+  return true;
+}
 
 // ============ 内存数据库 ============
 class MemoryDatabase {
@@ -390,7 +404,14 @@ const pageHtml = html`<!DOCTYPE html>
           }
         },
 
-        logout() {
+        async logout() {
+          const token = localStorage.getItem('admin_auth');
+          if (token) {
+            await fetch('/api/auth/logout', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + token }
+            });
+          }
           localStorage.removeItem('admin_auth');
           this.isLoggedIn = false;
           this.loginPassword = '';
@@ -747,6 +768,9 @@ app.post('/api/sign/:id', async (c) => {
   return c.json({ success: true, data: result, code: 200 });
 });
 
+// 存储活跃会话（内存存储，实例重启后失效）
+const activeSessions = new Set<string>();
+
 // 认证中间件
 const authMiddleware = async (c: any, next: any) => {
   const authHeader = c.req.header('Authorization');
@@ -754,8 +778,8 @@ const authMiddleware = async (c: any, next: any) => {
     return c.json({ success: false, message: '未登录', code: 401 }, 401);
   }
   const token = authHeader.substring(7);
-  if (token !== ADMIN_PASSWORD) {
-    return c.json({ success: false, message: '认证失败', code: 401 }, 401);
+  if (!activeSessions.has(token)) {
+    return c.json({ success: false, message: '认证失败或会话已过期', code: 401 }, 401);
   }
   await next();
 };
@@ -764,9 +788,21 @@ const authMiddleware = async (c: any, next: any) => {
 app.post('/api/auth/login', async (c) => {
   const body = await c.req.json();
   if (body.password === ADMIN_PASSWORD) {
-    return c.json({ success: true, token: ADMIN_PASSWORD, code: 200 });
+    const token = generateToken();
+    activeSessions.add(token);
+    return c.json({ success: true, token, code: 200 });
   }
   return c.json({ success: false, message: '密码错误', code: 401 }, 401);
+});
+
+// 登出 API
+app.post('/api/auth/logout', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    activeSessions.delete(token);
+  }
+  return c.json({ success: true, message: '已登出', code: 200 });
 });
 
 // 检查登录状态
