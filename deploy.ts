@@ -588,6 +588,84 @@ app.post('/api/accounts/import', async (c) => {
   return c.json({ success: successCount > 0, data: { total: body.length, successCount, failedCount: body.length - successCount, errors: [] }, code: 200 });
 });
 
+// ============ 鸣潮 API 调用 ============
+const KURO_API = {
+  SIGNIN_URL: 'https://api.kurobbs.com/encourage/signIn/v2',
+  SIGNIN_QUERY_URL: 'https://api.kurobbs.com/encourage/signIn/queryRecordV2',
+  SIGNIN_INIT_URL: 'https://api.kurobbs.com/encourage/signIn/initSignInV2',
+};
+
+// 生成签名
+function generateSign(token: string, queryParams: string): string {
+  const signStr = token + queryParams;
+  // 简化版签名，实际需要根据库洛的签名算法
+  return btoa(signStr).substring(0, 16);
+}
+
+// 调用鸣潮签到 API
+async function doKuroSignIn(account: any) {
+  try {
+    const headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'token': account.token,
+      'devcode': account.devCode || '',
+      'source': 'android',
+      'version': '2.2.0',
+      'versioncode': '2200',
+    };
+
+    // 1. 先查询今日是否已签到
+    const queryRes = await fetch(KURO_API.SIGNIN_QUERY_URL, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams({
+        gameId: '3',
+        serverId: account.serverId || '76402e5b20be2c79f95d4f4ad1e41172',
+        roleId: account.roleId,
+        userId: account.userId,
+      }),
+    });
+    const queryData = await queryRes.json();
+
+    // 检查今天是否已签到
+    if (queryData.data && queryData.data.signInRecord) {
+      const today = new Date().toISOString().split('T')[0];
+      const todayRecord = queryData.data.signInRecord.find((r: any) => r.signTime?.startsWith(today));
+      if (todayRecord) {
+        return { success: true, alreadySigned: true, message: '今日已签到', reward: todayRecord.goodsName };
+      }
+    }
+
+    // 2. 执行签到
+    const signRes = await fetch(KURO_API.SIGNIN_URL, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams({
+        gameId: '3',
+        serverId: account.serverId || '76402e5b20be2c79f95d4f4ad1e41172',
+        roleId: account.roleId,
+        userId: account.userId,
+      }),
+    });
+    const signData = await signRes.json();
+
+    if (signData.code === 200) {
+      return {
+        success: true,
+        alreadySigned: false,
+        message: '签到成功',
+        reward: signData.data?.goodsName || '星声 x20',
+      };
+    } else if (signData.code === 1511 || signData.msg?.includes('已签到')) {
+      return { success: true, alreadySigned: true, message: '今日已签到', reward: null };
+    } else {
+      return { success: false, message: signData.msg || '签到失败', reward: null };
+    }
+  } catch (error: any) {
+    return { success: false, message: '网络错误: ' + error.message, reward: null };
+  }
+}
+
 // 签到 API
 app.post('/api/sign/all', async (c) => {
   const accounts = db.getActiveAccounts();
@@ -596,17 +674,38 @@ app.post('/api/sign/all', async (c) => {
   const today = new Date().toISOString().split('T')[0];
 
   for (const account of accounts) {
-    if (db.hasSignedToday(account.id)) {
-      results.push({ accountId: account.id, userId: account.userId, status: 'already_signed', message: '今日已签到', signDate: today });
+    // 调用真实的鸣潮 API
+    const signResult = await doKuroSignIn(account);
+
+    const result = {
+      accountId: account.id,
+      userId: account.userId,
+      nickname: account.nickname,
+      status: signResult.alreadySigned ? 'already_signed' : (signResult.success ? 'success' : 'failed'),
+      message: signResult.message,
+      reward: signResult.reward,
+      signDate: today,
+    };
+
+    // 保存记录
+    db.createSignRecord({
+      accountId: account.id,
+      signDate: today,
+      status: result.status,
+      reward: signResult.reward,
+      message: signResult.message,
+    });
+
+    if (signResult.success && !signResult.alreadySigned) {
+      db.updateAccount(account.id, { lastSignTime: new Date().toISOString() });
+      success++;
+    } else if (signResult.alreadySigned) {
       alreadySigned++;
-      continue;
+    } else {
+      failed++;
     }
-    // 模拟签到
-    const result = { accountId: account.id, userId: account.userId, nickname: account.nickname, status: 'success', message: '签到成功', reward: '星声 x20', signDate: today };
-    db.createSignRecord({ accountId: account.id, signDate: today, status: 'success', reward: '星声 x20', message: '签到成功' });
-    db.updateAccount(account.id, { lastSignTime: new Date().toISOString() });
+
     results.push(result);
-    success++;
   }
 
   return c.json({ success: true, data: { total: accounts.length, success, failed, alreadySigned, skipped: 0, results }, code: 200 });
@@ -618,13 +717,32 @@ app.post('/api/sign/:id', async (c) => {
   if (!account) return c.json({ success: false, message: '账号不存在', code: 404 }, 404);
 
   const today = new Date().toISOString().split('T')[0];
-  if (db.hasSignedToday(id)) {
-    return c.json({ success: true, data: { accountId: id, userId: account.userId, status: 'already_signed', message: '今日已签到', reward: null, signDate: today }, code: 200 });
-  }
 
-  const result = { accountId: id, userId: account.userId, nickname: account.nickname, status: 'success', message: '签到成功', reward: '星声 x20', signDate: today };
-  db.createSignRecord({ accountId: id, signDate: today, status: 'success', reward: '星声 x20', message: '签到成功' });
-  db.updateAccount(id, { lastSignTime: new Date().toISOString() });
+  // 调用真实的鸣潮 API
+  const signResult = await doKuroSignIn(account);
+
+  const result = {
+    accountId: id,
+    userId: account.userId,
+    nickname: account.nickname,
+    status: signResult.alreadySigned ? 'already_signed' : (signResult.success ? 'success' : 'failed'),
+    message: signResult.message,
+    reward: signResult.reward,
+    signDate: today,
+  };
+
+  // 保存记录
+  db.createSignRecord({
+    accountId: id,
+    signDate: today,
+    status: result.status,
+    reward: signResult.reward,
+    message: signResult.message,
+  });
+
+  if (signResult.success && !signResult.alreadySigned) {
+    db.updateAccount(id, { lastSignTime: new Date().toISOString() });
+  }
 
   return c.json({ success: true, data: result, code: 200 });
 });
