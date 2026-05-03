@@ -286,6 +286,7 @@ const pageHtml = html`<!DOCTYPE html>
                 <td class="px-4 py-3">
                   <div class="flex space-x-2">
                     <button @click="signAccount(account.id)" :disabled="signing" class="text-green-600 hover:text-green-800" title="签到"><i class="fas fa-play"></i></button>
+                    <button @click="viewSignHistory(account)" class="text-indigo-600 hover:text-indigo-800" title="签到记录"><i class="fas fa-history"></i></button>
                     <button @click="validateAccount(account.id)" :disabled="validating" class="text-blue-600 hover:text-blue-800" title="验证"><i class="fas fa-check"></i></button>
                     <button @click="editAccount(account)" class="text-yellow-600 hover:text-yellow-800" title="编辑"><i class="fas fa-edit"></i></button>
                     <button @click="toggleAccount(account.id)" class="text-purple-600 hover:text-purple-800" title="启用/禁用"><i class="fas" :class="account.isActive ? 'fa-pause' : 'fa-play'"></i></button>
@@ -313,6 +314,41 @@ const pageHtml = html`<!DOCTYPE html>
             </div>
           </template>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 签到记录模态框 -->
+  <div x-show="showSignHistoryModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+      <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+        <h3 class="text-lg font-semibold">签到记录 - <span x-text="signHistoryAccount?.nickname || signHistoryAccount?.userId"></span></h3>
+        <button @click="showSignHistoryModal = false" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="p-4 overflow-y-auto flex-1">
+        <table class="w-full">
+          <thead class="bg-gray-50 sticky top-0">
+            <tr>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">日期</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">奖励</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">消息</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
+            <template x-for="record in signHistoryRecords" :key="record.id">
+              <tr class="hover:bg-gray-50">
+                <td class="px-4 py-2 text-sm" x-text="record.signDate"></td>
+                <td class="px-4 py-2">
+                  <span :class="{ 'bg-green-100 text-green-800': record.status === 'success', 'bg-yellow-100 text-yellow-800': record.status === 'already_signed', 'bg-red-100 text-red-800': record.status === 'failed' }" class="px-2 py-1 text-xs rounded-full" x-text="record.status === 'success' ? '成功' : (record.status === 'already_signed' ? '已签到' : '失败')"></span>
+                </td>
+                <td class="px-4 py-2 text-sm" x-text="record.reward || '-'"></td>
+                <td class="px-4 py-2 text-sm text-gray-600" x-text="record.message"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <p x-show="signHistoryRecords.length === 0" class="text-center text-gray-500 py-8">暂无签到记录</p>
       </div>
     </div>
   </div>
@@ -362,12 +398,26 @@ const pageHtml = html`<!DOCTYPE html>
         loading: false, signing: false, validating: false,
         accounts: [], stats: { totalAccounts: 0, validAccounts: 0, todaySigned: 0, todayPending: 0 },
         recentLogs: [], searchQuery: '',
-        showAddModal: false, showEditModal: false,
+        showAddModal: false, showEditModal: false, showSignHistoryModal: false,
         newAccount: { userId: '', roleId: '', token: '', nickname: '' },
         editAccountData: { id: null, userId: '', roleId: '', token: '', nickname: '' },
+        // 签到记录
+        signHistoryAccount: null, signHistoryRecords: [],
         toast: { show: false, message: '', type: 'success' },
         // 登录相关
         isLoggedIn: false, loginPassword: '', loginError: '',
+
+        async viewSignHistory(account) {
+          this.signHistoryAccount = account;
+          const res = await fetch(`/api/accounts/${account.id}/sign-records`, { headers: this.getAuthHeaders() });
+          const data = await res.json();
+          if (data.success) {
+            this.signHistoryRecords = data.data || [];
+            this.showSignHistoryModal = true;
+          } else {
+            this.showToast('获取签到记录失败', 'error');
+          }
+        },
 
         get filteredAccounts() {
           return this.accounts.filter(a => !this.searchQuery || a.userId.includes(this.searchQuery) || a.roleId.includes(this.searchQuery) || (a.nickname && a.nickname.includes(this.searchQuery)));
@@ -798,6 +848,13 @@ app.post('/api/sign/:id', async (c) => {
   }
 
   return c.json({ success: true, data: result, code: 200 });
+});
+
+// 获取账号签到记录
+app.get('/api/accounts/:id/sign-records', (c) => {
+  const id = parseInt(c.req.param('id'));
+  const records = db.getSignRecordsByAccount(id, 50);
+  return c.json({ success: true, data: records, code: 200 });
 });
 
 // 存储活跃会话（内存存储，实例重启后失效）
